@@ -1,0 +1,127 @@
+:root {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #94a3b8;
+    --card: #111827;
+    --accent: #22d3ee;
+}
+
+html, body, #__next {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, 'Helvetica Neue', Arial, 'Apple Color Emoji','Segoe UI Emoji';
+    background: var(--bg);
+    color: var(--fg);
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+.card {
+    background: linear-gradient(180deg,#0b1220,#0a0f1a);
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+
+.row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    background: #111827;
+    border: 1px solid #374151;
+    color: #e5e7eb;
+    padding: 10px 14px;
+    border-radius: 10px;
+    cursor: pointer
+}
+
+    .btn.primary {
+        background: #22d3ee22;
+        border-color: #22d3ee66;
+    }
+
+.input {
+    background: #0b1220;
+    color: #e5e7eb;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.list {
+    background: #0b1220;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 8px;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.badge {
+    font-size: 12px;
+    color: #93c5fd;
+    border: 1px solid #1f2937;
+    padding: 2px 6px;
+    border-radius: 999px;
+}
+
+.hand {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap
+}
+
+.cardTile {
+    width: 120px;
+    text-align: center;
+    background: #0b1220;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 8px
+}
+
+    .cardTile img {
+        width: 100%;
+        height: 160px;
+        object-fit: cover;
+        border-radius: 8px
+    }
+
+.log {
+    background: #0b1220;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 8px;
+    height: 240px;
+    overflow: auto
+}
+
+.chat {
+    background: #0b1220;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 8px;
+    height: 240px;
+    overflow: auto
+}
+
+.small {
+    font-size: 12px;
+    color: #94a3b8
+}
