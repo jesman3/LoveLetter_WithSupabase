@@ -28,6 +28,17 @@ async function getGame(code){
   return data;
 }
 
+async function sendDirectMessage(game_code, recipient_id, type, payload) {
+  await supabase.from('direct_messages').insert([
+    {
+      game_code,
+      recipient_id,
+      type,
+      payload,
+    }
+  ]);
+}
+
 export default async function handler(req, res){
   if(req.method !== 'POST') return res.status(405).json({ error:'Only POST' });
   const body = req.body || {};
@@ -157,6 +168,15 @@ export default async function handler(req, res){
           const tgt = state.players.find(p=>p.id===targetId);
           if(!tgt?.hand?.length) return res.status(400).json({ ok:false, message:'Target has no card' });
           state.log.push(`${player.name} used Priest on ${tgt.name}.`);
+          // Send direct message if not protected
+          if(!tgt.protected){
+            await sendDirectMessage(
+              code,
+              pid,
+              'privateReveal',
+              { targetName: tgt.name, card: tgt.hand[0] }
+            );
+          }
           break;
         }
         case 'Baron':{
@@ -204,19 +224,26 @@ export default async function handler(req, res){
 
       // Round end checks
       const active = state.players.filter(p=>!p.eliminated);
-      const newRound = ()=>{
-        state.deck = createDeck();
-        state.burn = state.deck.pop();
-        state.players.forEach(p=>{ p.hand=[state.deck.pop()]; p.eliminated=false; p.protected=false; });
+
+      // Helper to reset for next round, but don't start it
+      const prepareNextRound = () => {
+        state.started = false;
+        state.deck = [];
+        state.burn = null;
         state.currentPlayerIndex = 0;
-        if(state.deck.length>0) state.players[0].hand.push(state.deck.pop());
+        state.players.forEach(p => {
+          p.hand = [];
+          p.eliminated = false;
+          p.protected = false;
+        });
+        // Optionally, keep log/chat, or clear as desired
       };
 
       if(active.length <= 1){
         const winner = active[0];
         if(winner) winner.tokens = (winner.tokens||0) + 1;
         state.log.push(`${winner ? winner.name : 'No one'} won the round (last player standing).`);
-        newRound();
+        prepareNextRound();
         await upsertGame(code, state);
         return res.status(200).json({ ok:true });
       }
@@ -228,7 +255,7 @@ export default async function handler(req, res){
           living[0].tokens = (living[0].tokens||0) + 1;
           state.log.push(`${living[0].name} won the round (highest card when deck empty).`);
         }
-        newRound();
+        prepareNextRound();
         await upsertGame(code, state);
         return res.status(200).json({ ok:true });
       }

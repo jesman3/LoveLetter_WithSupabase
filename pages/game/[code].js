@@ -12,6 +12,7 @@ export default function Game(){
   const [log, setLog] = useState([]);
   const [pending, setPending] = useState(null);
   const [name, setName] = useState('');
+  const [directMessages, setDirectMessages] = useState([]); // <-- NEW
   const pidRef = useRef('');
 
   useEffect(()=>{
@@ -54,7 +55,31 @@ export default function Game(){
       setState(s); setLog(s?.log || []); setChat(s?.chat || []);
     }).subscribe();
 
-    return ()=>{ supabase.removeChannel(channel); };
+    // --- NEW: subscribe to direct_messages for this game and player ---
+    const dmChannel = supabase.channel(`dm-${code}-${pid}`, { config: { broadcast: { self: false } } });
+    dmChannel.on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'direct_messages',
+        match: { game_code: code, recipient_id: pid } // <-- FIXED
+    }, (payload) => {
+        setDirectMessages(msgs => [...msgs, payload.new]);
+    }).subscribe();
+
+    // initial fetch for direct messages
+    (async ()=>{
+      const { data } = await supabase
+        .from('direct_messages')
+        .select('*')
+        .eq('game_code', code)
+        .eq('recipient_id', pid);
+      if(data) setDirectMessages(data);
+    })();
+
+    return ()=>{
+      supabase.removeChannel(channel);
+      supabase.removeChannel(dmChannel);
+    };
   }, [code]);
 
   async function startGame(){
@@ -132,16 +157,62 @@ export default function Game(){
           <h3 style={{marginTop:12}}>Log</h3>
           <div className="log">{(log||[]).slice().reverse().map((l,i)=>(<div key={i}>{l}</div>))}</div>
           <button className="btn primary" style={{marginTop:12}} onClick={startGame}>Start Game</button>
+          {/* --- NEW: Direct Messages --- */}
+          {directMessages.length > 0 && (
+            <div className="card" style={{marginTop:12, background:'#ffe'}}>
+              <h4>Direct Messages</h4>
+              <div>
+                {directMessages.slice().reverse().map(dm => (
+                  <div key={dm.id} style={{marginBottom:8}}>
+                    {dm.type === 'privateReveal' && (
+                      <span>
+                        <strong>Priest Reveal:</strong> {dm.payload.targetName} has <strong>{dm.payload.card.name}</strong> ({dm.payload.card.value})
+                      </span>
+                    )}
+                    {/* Add more types as needed */}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="card" style={{flex:2}}>
           <h3>Your Hand</h3>
           <div className="hand">
             {me?.hand?.map((c,i)=>(
-              <div key={i} className="cardTile">
-                <img src={`/cards/${c.name.toLowerCase()}.svg`} alt={c.name} />
-                <div style={{marginTop:6}}><strong>{c.name}</strong> <span className="small">({c.value})</span></div>
-                <button className="btn" style={{marginTop:8}} onClick={()=>playCard(i)}>Play</button>
+              <div
+                key={i}
+                className="cardTile"
+                style={{
+                  width: 180,           // 120px wide
+                  height: 270,          // 180px tall (2:3 aspect)
+                  background: '#f8f8ff',
+                  border: '2px solid #ccc',
+                  borderRadius: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  margin: '8px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+                }}
+              >
+                <img
+                  src={`/cards/${c.name.toLowerCase()}.jpeg`}
+                  alt={c.name}
+                  style={{
+                    width: '144px',
+                    height: '216px',    // 2:3 aspect
+                    objectFit: 'cover',
+                    borderRadius: 8,
+                    marginTop: 8
+                  }}
+                />
+                <div style={{marginTop:6}}>
+                  <strong>{c.name}</strong> <span className="small">({c.value})</span>
+                </div>
+                <button className="btn" style={{marginBottom:8}} onClick={()=>playCard(i)}>Play</button>
               </div>
             )) || <div className="small">Waiting for your hand…</div>}
           </div>
