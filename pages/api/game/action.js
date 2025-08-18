@@ -150,6 +150,15 @@ export default async function handler(req, res){
 
       switch(card.name){
         case 'Guard':{
+          // Find all valid targets (not self, not eliminated, not protected)
+          const validTargets = state.players.filter(p =>
+            p.id !== player.id && !p.eliminated && !p.protected
+          );
+          if(validTargets.length === 0){
+            // No valid targets, allow discard
+            state.log.push(`${player.name} discarded Guard (no valid targets).`);
+            break;
+          }
           if(!targetId) return res.status(400).json({ ok:false, message:'Guard needs a target' });
           if(!guessedCard || guessedCard==='Guard') return res.status(400).json({ ok:false, message:'Invalid guess' });
           const tgt = state.players.find(p=>p.id===targetId);
@@ -180,6 +189,15 @@ export default async function handler(req, res){
           break;
         }
         case 'Baron':{
+          // Find all valid targets (not self, not eliminated, not protected)
+          const validTargets = state.players.filter(p =>
+            p.id !== player.id && !p.eliminated && !p.protected
+          );
+          if(validTargets.length === 0){
+            // No valid targets, allow discard
+            state.log.push(`${player.name} discarded Baron (no valid targets).`);
+            break;
+          }
           if(!targetId) return res.status(400).json({ ok:false, message:'Baron needs a target' });
           const tgt = state.players.find(p=>p.id===targetId);
           const myCard = player.hand[0];
