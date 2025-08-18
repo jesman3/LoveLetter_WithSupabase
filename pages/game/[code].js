@@ -58,7 +58,11 @@ export default function Game(){
   }, [code]);
 
   async function startGame(){
-    await fetch('/api/game/action', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'start', code }) });
+    await fetch('/api/game/action', { 
+      method:'POST', 
+      headers:{'Content-Type':'application/json'}, 
+      body: JSON.stringify({ action:'start', code, pid: pidRef.current }) // Pass pid
+    });
   }
 
   async function sendChat(text){

@@ -67,7 +67,7 @@ export default async function handler(req, res){
     }
 
     if(action === 'start'){
-      const { code } = body;
+      const { code, pid } = body; // Accept pid
       const row = await getGame(code);
       if(!row) return res.status(404).json({ ok:false, message:'game not found' });
       const state = row.state;
@@ -76,9 +76,11 @@ export default async function handler(req, res){
       state.deck = createDeck();
       state.burn = state.deck.pop();
       state.players.forEach(p => { p.hand = [ state.deck.pop() ]; p.eliminated = false; p.protected = false; });
-      state.currentPlayerIndex = 0;
+      // Find the index of the player who started the game
+      const starterIdx = state.players.findIndex(p => p.id === pid);
+      state.currentPlayerIndex = starterIdx >= 0 ? starterIdx : 0;
       state.log = [];
-      if(state.deck.length>0) state.players[0].hand.push(state.deck.pop());
+      if(state.deck.length>0) state.players[state.currentPlayerIndex].hand.push(state.deck.pop());
       await upsertGame(code, state);
       return res.status(200).json({ ok:true });
     }
