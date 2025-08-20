@@ -50,7 +50,7 @@ export default async function handler(req, res){
       const pid = body.pid || ('p_'+Math.random().toString(36).slice(2,9));
       const state = {
         code,
-        players: [{ id: pid, name: playerName, hand: [], tokens: 0, eliminated: false }],
+        players: [{ id: pid, name: playerName, hand: [], tokens: 0, eliminated: false, discarded: [] }],
         deck: [],
         started: false,
         currentPlayerIndex: 0,
@@ -71,7 +71,7 @@ export default async function handler(req, res){
       const canonicalPid = pid || ('p_'+Math.random().toString(36).slice(2,9));
       const exists = state.players.find(p => p.id === canonicalPid || p.name === playerName);
       if(!exists){
-        state.players.push({ id: canonicalPid, name: playerName, hand: [], tokens: 0, eliminated: false });
+        state.players.push({ id: canonicalPid, name: playerName, hand: [], tokens: 0, eliminated: false, discarded: [] });
       }
       await upsertGame(code, state);
       return res.status(200).json({ ok:true, pid: canonicalPid });
@@ -86,7 +86,12 @@ export default async function handler(req, res){
       state.started = true;
       state.deck = createDeck();
       state.burn = state.deck.pop();
-      state.players.forEach(p => { p.hand = [ state.deck.pop() ]; p.eliminated = false; p.protected = false; });
+      state.players.forEach(p => {
+        p.hand = [ state.deck.pop() ];
+        p.eliminated = false;
+        p.protected = false;
+        p.discarded = []; // <-- Clear discarded cards for new round
+      });
       // Find the index of the player who started the game
       const starterIdx = state.players.findIndex(p => p.id === pid);
       state.currentPlayerIndex = starterIdx >= 0 ? starterIdx : 0;
@@ -137,6 +142,8 @@ export default async function handler(req, res){
 
       // Remove the played card
       const card = player.hand.splice(cardIndex,1)[0];
+      player.discarded = player.discarded || [];
+      player.discarded.push(card);
 
       state.log = state.log || [];
       state.log.push(`${player.name} played ${card.name}.`);
@@ -165,6 +172,10 @@ export default async function handler(req, res){
           if(!tgt?.hand?.length) return res.status(400).json({ ok:false, message:'Target has no card' });
           const actual = tgt.hand[0].name;
           if(actual === guessedCard){
+            // Move the last card to discarded before eliminating
+            tgt.discarded = tgt.discarded || [];
+            tgt.discarded.push(tgt.hand[0]);
+            tgt.hand = [];
             tgt.eliminated = true;
             state.log.push(`${player.name} guessed ${guessedCard} correctly — ${tgt.name} is eliminated.`);
           } else {
@@ -179,12 +190,16 @@ export default async function handler(req, res){
           state.log.push(`${player.name} used Priest on ${tgt.name}.`);
           // Send direct message if not protected
           if(!tgt.protected){
-            await sendDirectMessage(
-              code,
-              pid,
-              'privateReveal',
-              { targetName: tgt.name, card: tgt.hand[0] }
-            );
+            // Only send one message per recipient
+            const recipients = new Set([pid, tgt.id]);
+            for (const rid of recipients) {
+              await sendDirectMessage(
+                code,
+                rid,
+                'privateReveal',
+                { targetName: tgt.name, card: tgt.hand[0] }
+              );
+            }
           }
           break;
         }
@@ -203,9 +218,25 @@ export default async function handler(req, res){
           const myCard = player.hand[0];
           const theirCard = tgt?.hand?.[0];
           if(!myCard || !theirCard) return res.status(400).json({ ok:false, message:'Both must have a card' });
-          if(myCard.value > theirCard.value){ tgt.eliminated = true; state.log.push(`${player.name} (${myCard.name}) beat ${tgt.name} (${theirCard.name}).`); }
-          else if(myCard.value < theirCard.value){ player.eliminated = true; state.log.push(`${tgt.name} (${theirCard.name}) beat ${player.name} (${myCard.name}).`); }
-          else { state.log.push(`${player.name} and ${tgt.name} tied with ${myCard.name}.`); }
+          if(myCard.value > theirCard.value){
+            // Target loses: move their card to discard, clear hand, eliminate
+            tgt.discarded = tgt.discarded || [];
+            tgt.discarded.push(theirCard);
+            tgt.hand = [];
+            tgt.eliminated = true;
+            state.log.push(`${player.name} beat ${tgt.name}.`);
+          }
+          else if(myCard.value < theirCard.value){
+            // Player loses: move their card to discard, clear hand, eliminate
+            player.discarded = player.discarded || [];
+            player.discarded.push(myCard);
+            player.hand = [];
+            player.eliminated = true;
+            state.log.push(`${tgt.name} beat ${player.name}.`);
+          }
+          else {
+            state.log.push(`${player.name} and ${tgt.name} tied.`);
+          }
           break;
         }
         case 'Handmaid':{
@@ -217,9 +248,16 @@ export default async function handler(req, res){
           const tgt = state.players.find(p=>p.id===targetId);
           const discarded = tgt?.hand?.pop();
           if(!discarded) return res.status(400).json({ ok:false, message:'Target has no card' });
+          tgt.discarded = tgt.discarded || [];
+          tgt.discarded.push(discarded); // <-- Always add to discarded
           state.log.push(`${tgt.name} discarded ${discarded.name} due to Prince.`);
-          if(discarded.name==='Princess'){ tgt.eliminated = true; state.log.push(`${tgt.name} discarded the Princess and was eliminated.`); }
-          else { if(state.deck.length>0) tgt.hand = [ state.deck.pop() ]; else tgt.hand = []; }
+          if(discarded.name==='Princess'){
+            tgt.eliminated = true;
+            state.log.push(`${tgt.name} discarded the Princess and was eliminated.`);
+          } else {
+            if(state.deck.length>0) tgt.hand = [ state.deck.pop() ];
+            else tgt.hand = [];
+          }
           break;
         }
         case 'King':{
@@ -247,19 +285,27 @@ export default async function handler(req, res){
       const prepareNextRound = () => {
         state.started = false;
         state.deck = [];
-        state.burn = null;
         state.currentPlayerIndex = 0;
         state.players.forEach(p => {
           p.hand = [];
           p.eliminated = false;
           p.protected = false;
+          // p.discarded remains!
         });
         // Optionally, keep log/chat, or clear as desired
       };
 
       if(active.length <= 1){
         const winner = active[0];
-        if(winner) winner.tokens = (winner.tokens||0) + 1;
+        if(winner) {
+          winner.tokens = (winner.tokens||0) + 1;
+          // Move remaining hand card to discarded before clearing hand
+          winner.discarded = winner.discarded || [];
+          if (winner.hand && winner.hand.length > 0) {
+            winner.discarded.push(...winner.hand);
+            winner.hand = [];
+          }
+        }
         state.log.push(`${winner ? winner.name : 'No one'} won the round (last player standing).`);
         prepareNextRound();
         await upsertGame(code, state);
@@ -272,6 +318,14 @@ export default async function handler(req, res){
           living.sort((a,b)=>b.hand[0].value - a.hand[0].value);
           living[0].tokens = (living[0].tokens||0) + 1;
           state.log.push(`${living[0].name} won the round (highest card when deck empty).`);
+          // Move remaining hand cards to discarded for all living players
+          living.forEach(p => {
+            p.discarded = p.discarded || [];
+            if (p.hand && p.hand.length > 0) {
+              p.discarded.push(...p.hand);
+              p.hand = [];
+            }
+          });
         }
         prepareNextRound();
         await upsertGame(code, state);
@@ -286,6 +340,16 @@ export default async function handler(req, res){
       if(state.deck.length>0) state.players[state.currentPlayerIndex].hand.push(state.deck.pop());
 
       await upsertGame(code, state);
+      return res.status(200).json({ ok:true });
+    }
+
+    if(action === 'clearDirectMessages'){
+      const { code } = body;
+      await supabase.from('direct_messages').delete().eq('game_code', code);
+      // Broadcast a custom event to all clients
+      await supabase
+        .channel(`game-${code}`)
+        .send({ type: 'broadcast', event: 'directMessagesCleared', payload: { code } });
       return res.status(200).json({ ok:true });
     }
 

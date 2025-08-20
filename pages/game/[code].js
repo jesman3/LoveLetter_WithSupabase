@@ -4,6 +4,18 @@ import { supabase } from '@/lib/supabaseClient';
 
 const GUESSABLE = ['Priest','Baron','Handmaid','Prince','King','Countess','Princess'];
 
+// Add a lookup for card values
+const CARD_VALUES = {
+  Guard: 1,
+  Priest: 2,
+  Baron: 3,
+  Handmaid: 4,
+  Prince: 5,
+  King: 6,
+  Countess: 7,
+  Princess: 8
+};
+
 export default function Game(){
   const router = useRouter();
   const { code } = router.query;
@@ -14,6 +26,7 @@ export default function Game(){
   const [name, setName] = useState('');
   const [directMessages, setDirectMessages] = useState([]); // <-- NEW
   const pidRef = useRef('');
+  const logRef = useRef(null);
 
   useEffect(()=>{
     if(!code) return;
@@ -61,20 +74,32 @@ export default function Game(){
         event: 'INSERT',
         schema: 'public',
         table: 'direct_messages',
-        match: { game_code: code, recipient_id: pid } // <-- FIXED
+        match: { game_code: code, recipient_id: pid }
     }, (payload) => {
         setDirectMessages(msgs => [...msgs, payload.new]);
     }).subscribe();
 
-    // initial fetch for direct messages
-    (async ()=>{
+    // Initial fetch for direct messages
+    (async () => {
       const { data } = await supabase
         .from('direct_messages')
         .select('*')
         .eq('game_code', code)
         .eq('recipient_id', pid);
-      if(data) setDirectMessages(data);
+      if (data) setDirectMessages(data);
     })();
+
+    channel.on('broadcast', { event: 'directMessagesCleared' }, (payload) => {
+      // Re-fetch direct messages for this player
+      (async () => {
+        const { data } = await supabase
+          .from('direct_messages')
+          .select('*')
+          .eq('game_code', code)
+          .eq('recipient_id', pidRef.current);
+        setDirectMessages(data || []);
+      })();
+    });
 
     return ()=>{
       supabase.removeChannel(channel);
@@ -82,11 +107,22 @@ export default function Game(){
     };
   }, [code]);
 
+    useEffect(() => {
+        if (logRef.current) {
+            logRef.current.scrollTop = logRef.current.scrollHeight;
+        }
+    }, [log]);
+
   async function startGame(){
     await fetch('/api/game/action', { 
       method:'POST', 
       headers:{'Content-Type':'application/json'}, 
-      body: JSON.stringify({ action:'start', code, pid: pidRef.current }) // Pass pid
+      body: JSON.stringify({ action:'start', code, pid: pidRef.current })
+    });
+    await fetch('/api/game/action', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'clearDirectMessages', code })
     });
   }
 
@@ -126,11 +162,8 @@ export default function Game(){
     const card = me?.hand?.[pending.cardIndex];
     if(!card) return;
     if(card.name==='Guard'){
-      const g = prompt('Guess a card (not Guard): '+GUESSABLE.join(', '));
-      if(!g) return;
-      const guess = g.trim();
-      if(!GUESSABLE.includes(guess)) return alert('Invalid guess');
-      return doPlay({ cardIndex: pending.cardIndex, targetId, guessedCard: guess });
+      setPending({ ...pending, targetId }); // Show guess modal
+      return;
     }
     doPlay({ cardIndex: pending.cardIndex, targetId });
   }
@@ -155,23 +188,39 @@ export default function Game(){
             ))}
           </div>
           <h3 style={{marginTop:12}}>Log</h3>
-          <div className="log">{(log||[]).slice().reverse().map((l,i)=>(<div key={i}>{l}</div>))}</div>
+          <div
+            className="log"
+            ref={logRef}
+            style={{
+              maxHeight: 180,
+              overflowY: 'auto',
+              marginBottom: 8,
+              paddingRight: 4,
+            }}
+          >
+            {(log || []).map((l, i) => (
+              <div key={i}>{l}</div>
+            ))}
+          </div>
           <button className="btn primary" style={{marginTop:12}} onClick={startGame}>Start Game</button>
           {/* --- NEW: Direct Messages --- */}
           {directMessages.length > 0 && (
             <div className="card" style={{marginTop:12, background:'#ffe'}}>
               <h4>Direct Messages</h4>
               <div>
-                {directMessages.slice().reverse().map(dm => (
-                  <div key={dm.id} style={{marginBottom:8}}>
-                    {dm.type === 'privateReveal' && (
-                      <span>
-                        <strong>Priest Reveal:</strong> {dm.payload.targetName} has <strong>{dm.payload.card.name}</strong> ({dm.payload.card.value})
-                      </span>
-                    )}
-                    {/* Add more types as needed */}
-                  </div>
-                ))}
+                {directMessages
+                  .filter(dm => dm.recipient_id === pidRef.current)
+                  .slice().reverse()
+                  .map(dm => (
+                    <div key={dm.id} style={{marginBottom:8}}>
+                      {dm.type === 'privateReveal' && (
+                        <span>
+                          <strong>Priest Reveal:</strong> {dm.payload.targetName} has <strong>{dm.payload.card.name}</strong> ({dm.payload.card.value})
+                        </span>
+                      )}
+                      {/* Add more types as needed */}
+                    </div>
+                  ))}
               </div>
             </div>
           )}
@@ -216,7 +265,13 @@ export default function Game(){
               </div>
             )) || <div className="small">Waiting for your hand…</div>}
           </div>
-          {pending && (
+          {pending && pending.targetId && state?.players?.find(p=>p.id===pidRef.current)?.hand?.[pending.cardIndex]?.name === 'Guard' && (
+            <GuessModal
+              onGuess={g => doPlay({ cardIndex: pending.cardIndex, targetId: pending.targetId, guessedCard: g })}
+              onCancel={() => setPending(null)}
+            />
+          )}
+          {pending && !pending.targetId && (
             <div className="card" style={{marginTop:12}}>
               <h4>Select a target</h4>
               <div className="hand">
@@ -228,6 +283,86 @@ export default function Game(){
               </div>
             </div>
           )}
+
+          {/* Virtual Table */}
+          <div className="virtual-table" style={{
+  marginTop: 24,
+  padding: '16px 0',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '18px',
+  background: '#f5f5fa',
+  borderRadius: 16,
+  minHeight: 120
+}}>
+  {(state?.players||[])
+    .map((p,idx)=>(
+      <div key={p.id} style={{display:'flex', flexDirection:'row', alignItems:'center', marginBottom:4}}>
+        <div style={{fontWeight:'bold', minWidth:90, color:'#000', marginRight:12}}>
+          {p.name}{p.id===pidRef.current ? ' (You)' : ''}
+        </div>
+        <div style={{display:'flex', gap:'4px', flexWrap:'wrap'}}>
+          {(p.discarded||[]).map((card,ci)=>(
+            <div key={ci} style={{
+              width:36, height:54, borderRadius:6, overflow:'hidden', border:'1px solid #bbb', background:'#fff', position:'relative', boxShadow:'0 1px 4px rgba(0,0,0,0.07)'
+            }}>
+              <img
+                src={`/cards/${card.name.toLowerCase()}.jpeg`}
+                alt={card.name}
+                style={{
+                  width:'72px', height:'108px', objectFit:'cover', position:'absolute', left:0, top:0, clipPath:'inset(0 36px 54px 0)'
+                }}
+              />
+              <div style={{
+                position:'absolute',
+                left:4,
+                top:4,
+                fontSize:12,
+                fontWeight:'bold',
+                color:'#000',
+                background:'rgba(255,255,255,0.85)',
+                borderRadius:2,
+                padding:'2px 5px'
+              }}>
+                {card.name[0]}{card.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ))}
+  {/* Reveal burn card if game is over and burn exists */}
+  {!state?.started && state?.burn && (
+    <div style={{marginTop:12, display:'flex', alignItems:'center'}}>
+      <div style={{fontWeight:'bold', minWidth:90, color:'#000', marginRight:12}}>Burn Card</div>
+      <div style={{
+        width:36, height:54, borderRadius:6, overflow:'hidden', border:'2px solid #d33', background:'#fff', position:'relative', boxShadow:'0 1px 4px rgba(0,0,0,0.12)'
+      }}>
+        <img
+          src={`/cards/${state.burn.name.toLowerCase()}.jpeg`}
+          alt={state.burn.name}
+          style={{
+            width:'72px', height:'108px', objectFit:'cover', position:'absolute', left:0, top:0, clipPath:'inset(0 36px 54px 0)'
+          }}
+        />
+        <div style={{
+          position:'absolute',
+          left:4,
+          top:4,
+          fontSize:12,
+          fontWeight:'bold',
+          color:'#000',
+          background:'rgba(255,230,230,0.95)',
+          borderRadius:2,
+          padding:'2px 5px'
+        }}>
+          {state.burn.name[0]}{state.burn.value}
+        </div>
+      </div>
+    </div>
+  )}
+</div>
         </div>
 
         <div className="card" style={{flex:1}}>
@@ -239,17 +374,87 @@ export default function Game(){
   );
 }
 
-function ChatPanel({ chat, onSend }){
-  const [val,setVal] = useState('');
+function ChatPanel({ chat, onSend }) {
+  const [val, setVal] = useState('');
+  const chatRef = useRef(null);
+
+  // Auto-scroll to bottom when chat changes
+  useEffect(() => {
+    if (chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight;
+    }
+  }, [chat]);
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && val.trim()) {
+      onSend(val);
+      setVal('');
+    }
+  }
+
   return (
     <div>
-      <div className="chat">
-        {(chat||[]).map((c,i)=>(<div key={i}><strong>{c.sender || c.name || 'Unknown'}:</strong> {c.message}</div>))}
+      <div
+        className="chat"
+        ref={chatRef}
+        style={{
+          maxHeight: 180,
+          overflowY: 'auto',
+          marginBottom: 8,
+          paddingRight: 4,
+        }}
+      >
+        {(chat || []).map((c, i) => (
+          <div key={i}>
+            <strong>{c.sender || c.name || 'Unknown'}:</strong> {c.message}
+          </div>
+        ))}
       </div>
-      <div className="row" style={{marginTop:8}}>
-        <input className="input" value={val} onChange={e=>setVal(e.target.value)} placeholder="Say hi…" />
-        <button className="btn" onClick={()=>{ if(val.trim()){ onSend(val); setVal(''); } }}>Send</button>
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          className="input"
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Say hi…"
+        />
+        <button className="btn" onClick={() => { if (val.trim()) { onSend(val); setVal(''); } }}>Send</button>
       </div>
     </div>
   );
+}
+
+// Update GuessModal to show name and value in dropdown
+function GuessModal({ onGuess, onCancel }) {
+  const [guess, setGuess] = useState(GUESSABLE[0]);
+  return (
+    <div className="card" style={{marginTop:12}}>
+      <h4>Guess a card</h4>
+      <select
+        value={guess}
+        onChange={e => setGuess(e.target.value)}
+        style={{marginBottom:8, width:'100%'}}
+      >
+        {GUESSABLE.map(g => (
+          <option key={g} value={g}>
+            {g} ({CARD_VALUES[g]})
+          </option>
+        ))}
+      </select>
+      <div>
+        <button className="btn primary" onClick={() => onGuess(guess)}>Guess</button>
+        <button className="btn" style={{marginLeft:8}} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Deduplicate helper
+function dedupeMessages(msgs) {
+  const seen = new Set();
+  return msgs.filter(m => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
 }
